@@ -1,0 +1,64 @@
+name: Cloud Sql db sync from prod to staging running on every Friday at 12AM
+
+on:
+  schedule:
+    - cron: "0 0 * * FRI" # every Friday 12AM
+
+jobs:
+  db-sync-prod-to-staging:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+
+    # Setup gcloud CLI
+    - name: Setup gcloud CLI for production
+      uses: GoogleCloudPlatform/github-actions/setup-gcloud@master
+      with:
+        version: '294.0.0'
+        project_id: ${{ secrets.GKE_PROJECT_PROD }}
+        service_account_email: ${{ secrets.GKE_EMAIL_PROD }}
+        service_account_key: ${{ secrets.GKE_KEY_PROD }}
+    - run: gcloud info
+
+    - name: Start SQL DB EXPORT from prod SQL instance to the staging bucket
+      run: |
+        gcloud sql export sql $SQL_PROD_INSTANCE $BUCKET_URL --database=$DATABASE_NAME
+      env:
+        SQL_PROD_INSTANCE: ${{ secrets.PROD_SQL_INSTANCE }}
+        BUCKET_URL: ${{ secrets.BUCKET_URL }}
+        DATABASE_NAME: ${{ secrets.PROD_DATABASE_NAME }}
+
+    # Setup gcloud CLI
+    - name: Setup gcloud CLI for staging
+      uses: GoogleCloudPlatform/github-actions/setup-gcloud@master
+      with:
+        version: '294.0.0'
+        project_id: ${{ secrets.GKE_PROJECT_STG }}
+        service_account_email: ${{ secrets.GKE_EMAIL_STG }}
+        service_account_key: ${{ secrets.GKE_KEY_STG }}
+    - run: gcloud info
+
+    - name: Delete the staging db client connections and drop the staging db
+      run: |
+        wget https://dl.google.com/cloudsql/cloud_sql_proxy.linux.amd64 -O cloud_sql_proxy
+        chmod +x cloud_sql_proxy
+        ./cloud_sql_proxy -instances=$SQL_PROXY_INSTANCE_URL &
+        sleep 5
+        PGPASSWORD=$DATABASE_PASSWORD psql -h 127.0.0.1 -U $DB_USER -d $DATABASE_NAME -c "select pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE datname='$DATABASE_NAME' AND pid <> pg_backend_pid();"
+        PGPASSWORD=$ADMIN_DATABASE_PASSWORD psql -h 127.0.0.1 -U $ADMIN_USER -c "DROP DATABASE $DATABASE_NAME;"
+      env:
+        DATABASE_NAME: ${{ secrets.STG_DATABASE_NAME }}
+        SQL_PROXY_INSTANCE_URL: ${{ secrets.SQL_PROXY_INSTANCE_URL }}
+        DATABASE_PASSWORD: ${{ secrets.STG_DATABASE_PASSWORD }}
+        DB_USER: ${{ secrets.STG_DB_USER }}
+        ADMIN_DATABASE_PASSWORD: ${{ secrets.STG_ADMIN_DATABASE_PASSWORD }}
+        ADMIN_USER: ${{ secrets.STG_ADMIN_USER }}
+
+    - name: Start SQL DB IMPORT from the staging bucket to your SQL staging instance
+      run: |
+        gcloud sql databases create $DATABASE_NAME --instance=$STG_SQL_INSTANCE
+        gcloud sql import sql $STG_SQL_INSTANCE $BUCKET_URL --database=$DATABASE_NAME -q --async
+      env:
+        STG_SQL_INSTANCE: ${{ secrets.STG_SQL_INSTANCE }}
+        BUCKET_URL: ${{ secrets.BUCKET_URL }}
+        DATABASE_NAME: ${{ secrets.STG_DATABASE_NAME }}
