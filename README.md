@@ -1,7 +1,7 @@
 # cloudsql-db-sync
 Sync your staging db with production
 
-*This github action can run as a schedule job to update your cloudsql staging db with the production.
+*This github action can run as a schedule job to update your cloudsql staging db with the production.*
 
 For example:
 
